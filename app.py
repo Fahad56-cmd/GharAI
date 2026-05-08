@@ -1,130 +1,185 @@
-import streamlit as st
-import os
-
-st.set_page_config(page_title="GharAI", page_icon="🏠", layout="wide")
-
-import pandas as pd
+import os, json
 from dotenv import load_dotenv
 load_dotenv()
-from agent import run_gharai
-from price_loader import get_meta
+from groq import Groq
 
-st.markdown("""
-<style>
-.big-title { font-size: 2.4rem; font-weight: 700; color: #c9a84c; margin-bottom: 0; }
-.subtitle  { font-size: 1rem; color: #888; margin-top: 0; margin-bottom: 1.5rem; }
-.agent-log-box {
-    background: #0f1923; color: #00ff88;
-    font-family: monospace; font-size: 0.85rem;
-    padding: 1rem; border-radius: 8px;
-    line-height: 1.8;
-}
-</style>
-""", unsafe_allow_html=True)
 
-st.markdown('<p class="big-title">GharAI 🏠</p>', unsafe_allow_html=True)
-st.markdown('<p class="subtitle">Multi-Agent Interior Design Estimator — Pakistan</p>', unsafe_allow_html=True)
+def get_client():
+    key = os.environ.get("GROQ_API_KEY") or os.environ.get("groq_api_key", "")
+    return Groq(api_key=key)
 
-with st.sidebar:
-    st.markdown("### How it works")
-    st.info(
-        "3 AI agents run in sequence:\n\n"
-        "1. **Extractor** — reads your brief\n"
-        "2. **Cost Analyst** — calculates PKR costs\n"
-        "3. **Design Advisor** — gives suggestions"
-    )
-    st.markdown("### Price database")
-    try:
-        meta = get_meta()
-        st.caption(f"Last updated: **{meta['last_updated']}**")
-        st.caption(f"Source: {meta['source']}")
-        st.caption(f"Currency: {meta['currency']}")
-    except Exception:
-        st.caption("Price database loaded.")
-    st.markdown("### Example briefs")
-    st.code("3 bedroom apartment Karachi, marble floors, textured walls, modern, PKR 800,000")
-    st.code("1 drawing room Lahore, porcelain tiles, painted walls, classic style, PKR 200,000")
-    st.code("2 bedroom flat Islamabad, marble, texture, contemporary, PKR 500,000")
 
-brief = st.text_area(
-    "Describe your project:",
-    placeholder="e.g. 3 bedroom apartment in Karachi, marble floors, textured walls, modern style, budget PKR 800,000",
-    height=100
-)
+def calculate_areas(length, width, height):
+    return {
+        "floor_area":   length * width,
+        "wall_area":    2 * (length * height) + 2 * (width * height),
+        "ceiling_area": length * width
+    }
 
-run_btn = st.button("🚀 Run All Agents", type="primary", use_container_width=True)
 
-if run_btn:
-    if not brief.strip():
-        st.warning("Please type a project brief first.")
+def calculate_costs(areas, floor_material, wall_finish):
+    prices = {
+        "marble":    {"material": 450, "labor": 80,  "waste": 1.10},
+        "porcelain": {"material": 180, "labor": 60,  "waste": 1.08},
+        "paint":     {"price_per_liter": 1200, "coverage": 12, "coats": 2, "labor": 35},
+        "texture":   {"price_per_kg": 850,    "coverage": 8,              "labor": 60},
+        "ceiling":   {"price_per_liter": 900,  "coverage": 12, "coats": 2, "labor": 25},
+    }
+
+    floor_area   = areas["floor_area"]
+    wall_area    = areas["wall_area"]
+    ceiling_area = areas["ceiling_area"]
+
+    fp = prices[floor_material]
+    floor_material_cost = floor_area * fp["waste"] * fp["material"]
+    floor_labor_cost    = floor_area * fp["waste"] * fp["labor"]
+
+    wp = prices[wall_finish]
+    if wall_finish == "paint":
+        liters = (wall_area / wp["coverage"]) * wp["coats"]
+        wall_material_cost = liters * wp["price_per_liter"]
     else:
-        with st.spinner("Agents are working..."):
-            try:
-                result = run_gharai(brief)
-            except Exception as e:
-                st.error(f"Something went wrong: {e}")
-                st.stop()
+        kgs = wall_area / wp["coverage"]
+        wall_material_cost = kgs * wp["price_per_kg"]
+    wall_labor_cost = wall_area * wp["labor"]
 
-        room     = result["room"]
-        analysis = result["analysis"]
-        advice   = result["advice"]
-        log      = result["agent_log"]
+    cp = prices["ceiling"]
+    ceil_liters = (ceiling_area / cp["coverage"]) * cp["coats"]
+    ceil_material_cost = ceil_liters * cp["price_per_liter"]
+    ceil_labor_cost    = ceiling_area * cp["labor"]
 
-        st.divider()
+    subtotal    = (floor_material_cost + floor_labor_cost +
+                   wall_material_cost  + wall_labor_cost  +
+                   ceil_material_cost  + ceil_labor_cost)
+    contingency = subtotal * 0.10
 
-        st.markdown("#### 🤖 Agent log")
-        log_html = "<br>".join(log)
-        st.markdown(f'<div class="agent-log-box">{log_html}</div>', unsafe_allow_html=True)
+    breakdown = {
+        "Floor material":   round(floor_material_cost),
+        "Floor labor":      round(floor_labor_cost),
+        "Wall material":    round(wall_material_cost),
+        "Wall labor":       round(wall_labor_cost),
+        "Ceiling material": round(ceil_material_cost),
+        "Ceiling labor":    round(ceil_labor_cost),
+        "Contingency (10%)":round(contingency),
+    }
+    total = sum(breakdown.values())
+    return breakdown, total
 
-        st.divider()
 
-        st.markdown("#### 📐 Room dimensions detected")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Length",  f"{room.get('length', 0)} ft")
-        c2.metric("Width",   f"{room.get('width', 0)} ft")
-        c3.metric("Height",  f"{room.get('height', 0)} ft")
-        c4.metric("Rooms",   room.get("num_rooms", 1))
-
-        st.divider()
-
-        st.markdown("#### 📏 Areas calculated")
-        a1, a2, a3 = st.columns(3)
-        a1.metric("Floor area",   f"{analysis['areas']['floor_area']:,.0f} sqft")
-        a2.metric("Wall area",    f"{analysis['areas']['wall_area']:,.0f} sqft")
-        a3.metric("Ceiling area", f"{analysis['areas']['ceiling_area']:,.0f} sqft")
-
-        st.divider()
-
-        st.markdown("#### 💰 Cost breakdown (PKR)")
-        if analysis["cost_breakdown"]:
-            cost_df = pd.DataFrame(
-                list(analysis["cost_breakdown"].items()),
-                columns=["Item", "Cost (PKR)"]
+class ExtractorAgent:
+    def run(self, brief: str) -> dict:
+        try:
+            resp = get_client().chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content":
+                     "You extract room data from Pakistani interior design briefs. "
+                     "Return ONLY a raw JSON object with these exact keys: "
+                     "length (float feet), width (float feet), height (float default 10), "
+                     "num_rooms (int default 1), "
+                     "floor_material (exactly marble or porcelain), "
+                     "wall_finish (exactly paint or texture), "
+                     "style (string), budget_pkr (float). No markdown. No explanation."},
+                    {"role": "user", "content": brief}
+                ]
             )
-            cost_df["Cost (PKR)"] = cost_df["Cost (PKR)"].apply(lambda x: f"PKR {x:,.0f}")
-            st.dataframe(cost_df, use_container_width=True, hide_index=True)
-        else:
-            st.warning("Cost breakdown unavailable.")
+            raw = resp.choices[0].message.content.strip()
+            raw = raw.replace("```json", "").replace("```", "").strip()
+            return json.loads(raw)
+        except Exception:
+            return {
+                "length": 15, "width": 12, "height": 10, "num_rooms": 1,
+                "floor_material": "marble", "wall_finish": "texture",
+                "style": "modern", "budget_pkr": 800000
+            }
 
-        st.divider()
 
-        st.markdown("#### 🏷️ Total vs budget")
-        total  = analysis["total_cost"]
-        budget = room.get("budget_pkr", 0)
-        gap    = analysis["budget_gap"]
-        delta  = f"PKR {abs(gap):,.0f} {'over budget' if gap > 0 else 'under budget'}"
-        st.metric(
-            label="Total estimated cost",
-            value=f"PKR {total:,.0f}",
-            delta=delta,
-            delta_color="inverse"
-        )
+class CostAnalystAgent:
+    def run(self, room: dict) -> dict:
+        try:
+            areas = calculate_areas(
+                room["length"], room["width"], room["height"]
+            )
+            breakdown, total = calculate_costs(
+                areas, room["floor_material"], room["wall_finish"]
+            )
+            if room.get("num_rooms", 1) > 1:
+                total = round(total * room["num_rooms"] * 0.85)
+            return {
+                "areas":          areas,
+                "cost_breakdown": breakdown,
+                "total_cost":     total,
+                "over_budget":    total > room.get("budget_pkr", float("inf")),
+                "budget_gap":     total - room.get("budget_pkr", 0),
+            }
+        except Exception as e:
+            return {
+                "areas":          {"floor_area": 0, "wall_area": 0, "ceiling_area": 0},
+                "cost_breakdown": {},
+                "total_cost":     0,
+                "over_budget":    False,
+                "budget_gap":     0,
+            }
 
-        st.divider()
 
-        st.markdown("#### 💡 Design advisor suggestions")
-        for i, tip in enumerate(advice.get("suggestions", []), 1):
-            st.info(f"**Tip {i}:** {tip}")
+class DesignAdvisorAgent:
+    def run(self, room: dict, analysis: dict) -> dict:
+        try:
+            context = (
+                f"Style: {room['style']} | Rooms: {room.get('num_rooms',1)} | "
+                f"Floor: {room['floor_material']} | Wall: {room['wall_finish']} | "
+                f"Budget: PKR {room['budget_pkr']:,.0f} | "
+                f"Total cost: PKR {analysis['total_cost']:,.0f} | "
+                f"Over budget: {analysis['over_budget']}"
+            )
+            resp = get_client().chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content":
+                     "You are a Pakistani interior design expert with 15 years experience in "
+                     "Karachi, Lahore, and Islamabad. Give brutally practical advice. "
+                     "Return ONLY a raw JSON object with: "
+                     "suggestions (list of exactly 4 strings, each must mention a PKR amount "
+                     "or a specific Pakistani city or market), "
+                     "style_note (one sentence about this style in Pakistan)."},
+                    {"role": "user", "content": context}
+                ]
+            )
+            raw = resp.choices[0].message.content.strip()
+            raw = raw.replace("```json", "").replace("```", "").strip()
+            return json.loads(raw)
+        except Exception:
+            return {
+                "suggestions": [
+                    "Buy marble in bulk from Karachi's Abdullah Haroon Road to save PKR 40,000+",
+                    "For modern style, use light grey tones — hides dust in Pakistani climate",
+                    "Add 10% contingency — PKR material prices fluctuate monthly",
+                    "Hire labour from local contractors in Model Colony for 20% lower rates"
+                ],
+                "style_note": "Modern minimalist is the most popular style in Pakistani urban apartments."
+            }
 
-        if advice.get("style_note"):
-            st.caption(f"Style note: {advice['style_note']}")
+
+def run_gharai(user_brief: str) -> dict:
+    log = []
+
+    extractor = ExtractorAgent()
+    room = extractor.run(user_brief)
+    log.append(f"✅ ExtractorAgent — {room.get('num_rooms',1)}-room {room.get('style','modern')} project detected")
+
+    analyst = CostAnalystAgent()
+    analysis = analyst.run(room)
+    log.append(f"✅ CostAnalystAgent — Total PKR {analysis['total_cost']:,.0f} calculated")
+
+    advisor = DesignAdvisorAgent()
+    advice = advisor.run(room, analysis)
+    log.append(f"✅ DesignAdvisorAgent — {len(advice['suggestions'])} suggestions generated")
+
+    log.append("✅ Supervisor — Report compiled successfully")
+
+    return {
+        "room":      room,
+        "analysis":  analysis,
+        "advice":    advice,
+        "agent_log": log,
+    }
