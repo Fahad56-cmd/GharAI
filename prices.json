@@ -1,0 +1,39 @@
+{
+  "_meta": {
+    "last_updated": "2026-05-08",
+    "source": "Karachi & Lahore wholesale market survey",
+    "currency": "PKR"
+  },
+  "flooring": {
+    "marble": {
+      "price_per_sqft": 450,
+      "labor_per_sqft": 80,
+      "waste_factor": 1.10
+    },
+    "porcelain": {
+      "price_per_sqft": 180,
+      "labor_per_sqft": 60,
+      "waste_factor": 1.08
+    }
+  },
+  "walls": {
+    "paint": {
+      "price_per_liter": 1200,
+      "labor_per_sqft": 35,
+      "coverage_sqft_per_liter": 12,
+      "coats": 2
+    },
+    "texture": {
+      "price_per_kg": 850,
+      "labor_per_sqft": 60,
+      "coverage_sqft_per_kg": 8
+    }
+  },
+  "ceiling": {
+    "price_per_liter": 900,
+    "labor_per_sqft": 25,
+    "coverage_sqft_per_liter": 12,
+    "coats": 2
+  },
+  "contingency_percent": 10
+}
